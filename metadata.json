@@ -1,0 +1,5 @@
+{
+  "name": "School Subject Schedule Planner",
+  "description": "An intelligent web application for elementary/secondary schools to automate the distribution of subject teachers (교담) into homeroom schedules based on available periods and weekly hour requirements.",
+  "requestFramePermissions": []
+}
