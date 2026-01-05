@@ -10,7 +10,7 @@ export const autoGenerateSchedule = async (
 ): Promise<Record<string, string>> => {
   const availableSlots = allSlots
     .filter(s => s.isAvailable)
-    .map(s => `${s.grade}-${s.day}-${s.period}`);
+    .map(s => `${s.grade}-${s.classNumber}-${s.day}-${s.period}`);
 
   const teachersInput = teachers.map(t => ({
     id: t.id,
@@ -24,16 +24,16 @@ export const autoGenerateSchedule = async (
     당신은 학교 시간표 최적화 전문가입니다.
     
     [입력 데이터]
-    1. 배분 가능 슬롯 (학년-요일-교시): ${availableSlots.join(', ')}
-    2. 교사 정보 (targetGrades는 해당 교사가 수업 가능한 학년들임): ${JSON.stringify(teachersInput)}
+    1. 배분 가능 슬롯 (학년-반-요일-교시): ${availableSlots.join(', ')}
+    2. 교사 정보: ${JSON.stringify(teachersInput)}
     
     [배분 규칙]
-    1. 각 교사는 지정된 'targetGrades'에 속한 학년의 슬롯에만 배정될 수 있음.
-    2. 각 교사는 자신의 'totalHours'만큼만 수업을 배정받아야 함.
-    3. 중복 방지: 동일한 (요일-교시)에 한 명의 교사가 두 개 이상의 학년에 배정될 수 없음.
+    1. 각 교사는 'targetGrades'에 포함된 학년의 슬롯에만 배정될 수 있음.
+    2. 각 교사는 'totalHours'만큼만 수업을 배정받아야 함.
+    3. 절대 중복 방지: 동일한 (요일-교시)에 한 명의 교사가 어떤 학년의 어떤 반에도 중복 배정될 수 없음.
     4. 한 슬롯에는 한 명의 교사만 배정.
     
-    응답 형식 JSON: { "학년-요일-교시": "교사ID" }
+    응답 형식 JSON: { "학년-반-요일-교시": "교사ID" }
   `;
 
   try {
@@ -51,21 +51,23 @@ export const autoGenerateSchedule = async (
 
     for (const day of DAYS) {
       for (const period of PERIODS) {
-        const busyTeachers = new Set<string>();
-        for (const grade of GRADES) {
-          const slotKey = `${grade}-${day}-${period}`;
-          const slot = allSlots.find(s => s.grade === grade && s.day === day && s.period === period);
-          if (slot?.isAvailable) {
-            const possibleTeacher = teachers.find(t => 
-              t.targetGrades.includes(grade) &&
-              teacherWorkload[t.id] < t.totalWeeklyHours && 
-              !busyTeachers.has(t.id)
-            );
-            if (possibleTeacher) {
-              distribution[slotKey] = possibleTeacher.id;
-              teacherWorkload[possibleTeacher.id]++;
-              busyTeachers.add(possibleTeacher.id);
-            }
+        const busyTeachersThisPeriod = new Set<string>();
+        
+        // 가용 슬롯들을 섞어서 배정의 다양성 확보
+        const availableInThisTime = allSlots.filter(s => s.isAvailable && s.day === day && s.period === period);
+        
+        for (const slot of availableInThisTime) {
+          const slotKey = `${slot.grade}-${slot.classNumber}-${slot.day}-${slot.period}`;
+          const possibleTeacher = teachers.find(t => 
+            t.targetGrades.includes(slot.grade) &&
+            teacherWorkload[t.id] < t.totalWeeklyHours && 
+            !busyTeachersThisPeriod.has(t.id)
+          );
+          
+          if (possibleTeacher) {
+            distribution[slotKey] = possibleTeacher.id;
+            teacherWorkload[possibleTeacher.id]++;
+            busyTeachersThisPeriod.add(possibleTeacher.id);
           }
         }
       }
