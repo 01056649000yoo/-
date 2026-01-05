@@ -1,69 +1,72 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { Teacher, Slot, Day } from "../types";
+import { Teacher, Slot, DAYS, PERIODS, GRADES } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
 export const autoGenerateSchedule = async (
   teachers: Teacher[],
-  availableSlots: Slot[]
+  allSlots: Slot[]
 ): Promise<Record<string, string>> => {
-  // Convert slots to a simpler representation for the prompt
-  const slotsInput = availableSlots
+  const availableSlots = allSlots
     .filter(s => s.isAvailable)
-    .map(s => `${s.day}-${s.period}`);
+    .map(s => `${s.grade}-${s.day}-${s.period}`);
 
   const teachersInput = teachers.map(t => ({
     id: t.id,
     name: t.name,
     subject: t.subject,
-    hours: t.weeklyHours
+    totalHours: t.totalWeeklyHours,
+    targetGrades: t.targetGrades
   }));
 
   const prompt = `
-    학교 시간표 배분 전문가로서 다음 조건에 따라 교담(전담) 교사의 시수를 배분해줘.
+    당신은 학교 시간표 최적화 전문가입니다.
     
-    1. 배분 가능한 교담 시간(요일-교시): ${slotsInput.join(', ')}
-    2. 교담 교사 정보: ${JSON.stringify(teachersInput)}
+    [입력 데이터]
+    1. 배분 가능 슬롯 (학년-요일-교시): ${availableSlots.join(', ')}
+    2. 교사 정보 (targetGrades는 해당 교사가 수업 가능한 학년들임): ${JSON.stringify(teachersInput)}
     
-    배분 규칙:
-    - 각 교사의 주당 시수(hours)를 정확히 채워야 함.
-    - 한 교시에 한 명의 교사만 배분 가능.
-    - 가능한 특정 요일에 시수가 너무 몰리지 않게 균형 있게 배분.
+    [배분 규칙]
+    1. 각 교사는 지정된 'targetGrades'에 속한 학년의 슬롯에만 배정될 수 있음.
+    2. 각 교사는 자신의 'totalHours'만큼만 수업을 배정받아야 함.
+    3. 중복 방지: 동일한 (요일-교시)에 한 명의 교사가 두 개 이상의 학년에 배정될 수 없음.
+    4. 한 슬롯에는 한 명의 교사만 배정.
     
-    반드시 JSON 형식으로 응답할 것.
-    형식: { "요일-교시": "교사ID" }
+    응답 형식 JSON: { "학년-요일-교시": "교사ID" }
   `;
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          description: "Map of period identifier (Day-Period) to teacher ID",
-          properties: {}, // Flexible key mapping
-        }
-      }
+      config: { responseMimeType: "application/json" }
     });
-
-    const result = JSON.parse(response.text);
-    return result;
+    return JSON.parse(response.text);
   } catch (error) {
-    console.error("Gemini optimization failed", error);
-    // Fallback: Simple greedy distribution logic
+    console.error("AI 배분 실패, Fallback 실행");
     const distribution: Record<string, string> = {};
-    const sortedSlots = availableSlots.filter(s => s.isAvailable);
-    let slotIndex = 0;
+    const teacherWorkload: Record<string, number> = {};
+    teachers.forEach(t => teacherWorkload[t.id] = 0);
 
-    for (const teacher of teachers) {
-      for (let i = 0; i < teacher.weeklyHours; i++) {
-        if (slotIndex < sortedSlots.length) {
-          const slot = sortedSlots[slotIndex];
-          distribution[`${slot.day}-${slot.period}`] = teacher.id;
-          slotIndex++;
+    for (const day of DAYS) {
+      for (const period of PERIODS) {
+        const busyTeachers = new Set<string>();
+        for (const grade of GRADES) {
+          const slotKey = `${grade}-${day}-${period}`;
+          const slot = allSlots.find(s => s.grade === grade && s.day === day && s.period === period);
+          if (slot?.isAvailable) {
+            const possibleTeacher = teachers.find(t => 
+              t.targetGrades.includes(grade) &&
+              teacherWorkload[t.id] < t.totalWeeklyHours && 
+              !busyTeachers.has(t.id)
+            );
+            if (possibleTeacher) {
+              distribution[slotKey] = possibleTeacher.id;
+              teacherWorkload[possibleTeacher.id]++;
+              busyTeachers.add(possibleTeacher.id);
+            }
+          }
         }
       }
     }
